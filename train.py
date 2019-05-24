@@ -52,7 +52,7 @@ def main():
     model.to(device)
 
     if args.start_point > 0:
-        load_model(os.path.join(args.model_path, '{}_{}.pt'.format(args.model_name, args.start_point)), eval_mode=False)
+        load_model(model, os.path.join(args.model_path, '{}_{}.pt'.format(args.model_name, args.start_point)), eval_mode=False)
 
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
