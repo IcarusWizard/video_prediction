@@ -100,13 +100,13 @@ def main():
             actions = data['actions']
 
             # B x T ==> T x B
-            observations = torch.transpose(observations, 0, 1)
-            actions = torch.transpose(actions, 0, 1)
+            observations = torch.transpose(observations, 0, 1).to(device)
+            actions = torch.transpose(actions, 0, 1).to(device)
 
             predicted_observations = model(observations[0], actions)
 
             video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]])
-            torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video, fps=10)
+            torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
 
             loss = mse_loss(observations, predicted_observations).item() / args.batch_size
             losses.append(loss)
