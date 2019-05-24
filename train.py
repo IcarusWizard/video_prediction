@@ -1,5 +1,6 @@
 import torch
 import torchvision
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 from Video_dataset import VideoDataset
@@ -28,6 +29,7 @@ def main():
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
 
+    # dataset setup
     train_set = VideoDataset(args.data_path, 'train', args.horizon, fix_start=False)
     val_set = VideoDataset(args.data_path, 'val', args.horizon, fix_start=True)
 
@@ -39,6 +41,7 @@ def main():
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.cpu_workers)
     val_loader = torch.utils.data.DataLoader(val_set, batch_size=args.batch_size, num_workers=args.cpu_workers)
 
+    # model setup
     if args.model_name == 'cdna':
         model = CDNA(T, H, W, C, A)
 
@@ -47,6 +50,10 @@ def main():
 
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+    # tensorboard
+    writer = SummaryWriter()
+
+    step = 0
     epoch = args.start_point
     while epoch < args.start_point + args.epoch:
         for j, data in enumerate(train_loader):
@@ -65,6 +72,13 @@ def main():
 
             opt.step()
             opt.zero_grad()
+
+            # add summary
+            if step % 100 == 0:
+                writer.add_scalar('loss', loss.item(), global_step=step)
+                writer.add_video('video', predicted_observations.permute(0, 1), global_step=step, fps=10)
+            
+            step += 1
 
         epoch += 1
         save_model(model, os.path.join(args.model_path, '{}_{}.pt'.format(args.model_name, epoch)))
