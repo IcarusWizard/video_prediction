@@ -6,7 +6,7 @@ import numpy as np
 from Video_dataset import VideoDataset
 from model_util import setup_seed, mse_loss, save_model, load_model
 from data_util import torch_save_gif
-from models import CDNA
+from models import CDNA, ETD
 
 import argparse, os
 
@@ -26,6 +26,8 @@ def main():
 
     setup_seed(args.seed)
 
+    device = 'cuda:0' if torch.cuda.device_count() > 0 else 'cpu'
+
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
 
@@ -44,6 +46,10 @@ def main():
     # model setup
     if args.model_name == 'cdna':
         model = CDNA(T, H, W, C, A)
+    elif args.model_name == 'etd':
+        model = ETD(H, W, C, A, T, 5)
+
+    model.to(device)
 
     if args.start_point > 0:
         load_model(os.path.join(args.model_path, '{}_{}.pt'.format(args.model_name, args.start_point)), eval_mode=False)
@@ -61,8 +67,8 @@ def main():
             actions = data['actions']
 
             # B x T ==> T x B
-            observations = torch.transpose(observations, 0, 1)
-            actions = torch.transpose(actions, 0, 1)
+            observations = torch.transpose(observations, 0, 1).to(device)
+            actions = torch.transpose(actions, 0, 1).to(device)
 
             predicted_observations = model(observations[0], actions)
 
@@ -76,7 +82,7 @@ def main():
             # add summary
             if step % 100 == 0:
                 writer.add_scalar('loss', loss.item(), global_step=step)
-                writer.add_video('video', predicted_observations.permute(0, 1), global_step=step, fps=10)
+                writer.add_video('video', predicted_observations.permute(1, 0, 2, 3, 4), global_step=step, fps=10)
             
             step += 1
 

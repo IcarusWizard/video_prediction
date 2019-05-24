@@ -37,7 +37,7 @@ class VideoDataset(torch.utils.data.Dataset):
                     self.shapes.append(shape)
             elif 'action' in key:
                 self.action_key = key
-                self.action_shape = key  
+                self.action_shape = shape
                 self.keys.append(key)
                 self.shapes.append(shape)
         self.config = {'observations' : self.image_shape, 
@@ -93,6 +93,7 @@ class VideoDataset(torch.utils.data.Dataset):
 if __name__ == '__main__':
     dataset = VideoDataset('data/bair', 'val', horizon=15)
     config = dataset.get_config()
+    print(config)
     loader = torch.utils.data.DataLoader(dataset, batch_size=16, num_workers=8, shuffle=True)
     count = 0
     start = time.time()
