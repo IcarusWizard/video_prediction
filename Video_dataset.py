@@ -91,7 +91,7 @@ class VideoDataset(torch.utils.data.Dataset):
         return output
 
 if __name__ == '__main__':
-    dataset = VideoDataset('data/bair', 'val', horizon=15, fix_start=True)
+    dataset = VideoDataset('data/bair', 'val', horizon=10, fix_start=True)
     config = dataset.get_config()
     print(config)
     loader = torch.utils.data.DataLoader(dataset, batch_size=16, num_workers=8, shuffle=False)

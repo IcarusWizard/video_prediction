@@ -150,6 +150,85 @@ class Decoder(torch.nn.Module):
 
         return observation
 
+class EncoderSkip(torch.nn.Module):
+    def __init__(self, H=64, W=64, C=3, filter_size=5):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.filter_size = filter_size
+        self.padding = filter_size // 2
+
+        self.conv1 = torch.nn.Conv2d(self.C, 32, kernel_size=self.filter_size, stride=2, padding=self.padding)
+        self.norm1 = torch.nn.LayerNorm((32, self.H // 2, self.W // 2))
+        self.conv2 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.norm2 = torch.nn.LayerNorm((32, self.H // 2, self.W // 2))
+        self.conv3 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.norm3 = torch.nn.LayerNorm((32, self.H // 2, self.W // 2))
+        self.conv4 = torch.nn.Conv2d(32, 64, kernel_size=self.filter_size, stride=2, padding=self.padding)
+        self.norm4 = torch.nn.LayerNorm((64, self.H // 4, self.W // 4))
+        self.conv5 = torch.nn.Conv2d(64, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.norm5 = torch.nn.LayerNorm((64, self.H // 4, self.W // 4))
+        self.conv6 = torch.nn.Conv2d(64, 128, kernel_size=self.filter_size, stride=2, padding=self.padding)
+
+    def forward(self, observation):
+        """
+            Input:
+                observation -> tensor[B, C, H, W]
+            Output:
+                state -> tensor[B, 128, H // 8, W // 8]
+                en1 -> tensor[B, 32, H // 2, W // 2]
+                en2 -> tensor[B, 64, H // 4, W // 4]
+        """
+        en1 = self.norm1(F.relu(self.conv1(observation)))
+        en1 = self.norm2(F.relu(self.conv2(en1)))
+        en1 = self.norm3(F.relu(self.conv3(en1)))
+        en2 = self.norm4(F.relu(self.conv4(en1)))
+        en2 = self.norm5(F.relu(self.conv5(en2)))
+        state = self.conv6(en2)
+
+        return state, en1, en2
+
+class DecoderSkip(torch.nn.Module):
+    def __init__(self, H=8, W=8, C=3, filter_size=5):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.filter_size = filter_size
+        self.padding = self.filter_size // 2
+
+        self.deconv1 = torch.nn.ConvTranspose2d(128, 64, 
+                                kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1)
+        self.conv1 = torch.nn.Conv2d(64 * 2, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.deconv2 = torch.nn.ConvTranspose2d(64, 32, 
+                                kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1) 
+        self.conv2 = torch.nn.Conv2d(32 * 2, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)  
+        self.deconv3 = torch.nn.ConvTranspose2d(32, 16, 
+                                kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1)       
+        self.conv3 = torch.nn.Conv2d(16, 16, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv_top = torch.nn.Conv2d(16, self.C, kernel_size=self.filter_size, stride=1, padding=self.padding)
+
+    def forward(self, state, en1, en2):
+        """
+            Input:
+                state -> tensor[B, 128, H, W]
+                en1 -> tensor[B, 64, H * 2, W * 2]
+                en2 -> tensor[B, 32, H * 4, W * 4]
+            Output:
+                observation -> tensor[B, C, H * 8, W * 8]
+        """
+        upsample1 = F.relu(self.deconv1(state))
+        upsample1 = F.relu(self.conv1(torch.cat([upsample1, en2], 1)))
+        upsample2 = F.relu(self.deconv2(upsample1))
+        upsample2 = F.relu(self.conv2(torch.cat([upsample2, en1], 1)))
+        upsample3 = F.relu(self.deconv3(upsample2))
+        upsample3 = F.relu(self.conv3(upsample3))
+
+        observation = self.conv_top(upsample3)
+
+        return observation
+
 # --------------------------------------------------------
 #                        Models
 # --------------------------------------------------------
@@ -235,6 +314,34 @@ class ETD(torch.nn.Module):
             action = actions[t]
             new_state = self.transform(last_state, action)
             prediction = self.decoder(new_state)
+            last_state = new_state
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class ETDS(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = EncoderSkip(H, W, C, filter_size)
+        self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = DecoderSkip(H // 8, W // 8, C, filter_size)
+
+    def forward(self, observation_0, actions):
+        predicted_observations = []
+
+        last_state, en1, en2 = self.encoder(observation_0)
+
+        for t in range(self.T):
+            action = actions[t]
+            new_state = self.transform(last_state, action)
+            prediction = self.decoder(new_state, en1, en2)
             last_state = new_state
             predicted_observations.append(prediction.unsqueeze(0))
 
