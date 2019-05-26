@@ -23,7 +23,7 @@ def main():
     parser.add_argument('--model_name', type=str, default='cdna')
     parser.add_argument('--start_point', type=int, default=0)
     parser.add_argument('--no-gif', dest='save_gif', action='store_false')
-    parser.set_default(save_gif=True)
+    parser.set_defaults(save_gif=True)
 
     args = parser.parse_args()
 
