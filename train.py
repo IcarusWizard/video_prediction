@@ -21,6 +21,8 @@ def main():
     parser.add_argument('--cpu_workers', type=int, default=4)
     parser.add_argument('--model_name', type=str, default='cdna')
     parser.add_argument('--start_point', type=int, default=0)
+    parser.add_argument('--no-gif', dest='save_gif', action='store_false')
+    parser.set_default(save_gif=True)
 
     args = parser.parse_args()
 
@@ -96,6 +98,7 @@ def main():
             os.makedirs(gif_path)
 
         losses = []
+        videos = []
 
         for j, data in enumerate(val_loader):
             observations = data['observations']
@@ -108,12 +111,17 @@ def main():
             predicted_observations = model(observations[0], actions)
 
             video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]])
-            torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
+            videos.append(video[:, 0].unsqueeze(1))
+            if args.save_gif:
+                torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
 
             loss = mse_loss(observations, predicted_observations).item() / args.batch_size
             losses.append(loss)
             
             opt.zero_grad()
+        
+        videos = torch.cat(videos, 1)
+        writer.add_video('val_video', videos.permute(1, 0, 2, 3, 4), global_step=epoch, fps=10)
 
         print("-" * 50)
         print("In epoch {}, loss in val set is {}".format(epoch, np.mean(losses)))
