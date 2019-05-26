@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--horizon', type=int, default=10)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--cpu_workers', type=int, default=4)
+    parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--model_name', type=str, default='cdna')
     parser.add_argument('--start_point', type=int, default=0)
     parser.add_argument('--no-gif', dest='save_gif', action='store_false')
@@ -28,7 +29,7 @@ def main():
 
     setup_seed(args.seed)
 
-    device = 'cuda:0' if torch.cuda.device_count() > 0 else 'cpu'
+    device = 'cuda:%d' % args.gpu_id if torch.cuda.device_count() > 0 else 'cpu'
 
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
