@@ -56,8 +56,12 @@ def main():
 
     model.to(device)
 
+    model_path = os.path.join(args.model_path, '{}_{}'.format(args.model_name, args.horizon))
+    if not os.path.exists(model_path):
+        os.makedirs(model_path)
+
     if args.start_point > 0:
-        load_model(model, os.path.join(args.model_path, '{}_{}.pt'.format(args.model_name, args.start_point)), eval_mode=False)
+        load_model(model, os.path.join(model_path, '{}_{}.pt'.format(args.model_name, args.start_point)), eval_mode=False)
 
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -92,9 +96,9 @@ def main():
             step += 1
 
         epoch += 1
-        save_model(model, os.path.join(args.model_path, '{}_{}.pt'.format(args.model_name, epoch)))
+        save_model(model, os.path.join(model_path, '{}_{}.pt'.format(args.model_name, epoch)))
 
-        gif_path = os.path.join(args.model_path, args.model_name, 'val_{}'.format(epoch))
+        gif_path = os.path.join(model_path, 'val_{}'.format(epoch))
         if not os.path.exists(gif_path):
             os.makedirs(gif_path)
 
@@ -113,7 +117,7 @@ def main():
 
             video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]]) # tensor[T, C, H, W]
             videos.append(video.unsqueeze(0))
-            
+
             if args.save_gif:
                 torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
 
