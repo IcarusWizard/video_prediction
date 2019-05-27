@@ -269,7 +269,7 @@ class DecoderSkip(torch.nn.Module):
 
         self.deconv2 = torch.nn.ConvTranspose2d(64, 32, 
                                 kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1) 
-        self.conv2_1 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)  
+        self.conv2_1 = torch.nn.Conv2d(32 * 2, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)  
         self.conv2_2 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
         self.conv2_skip = torch.nn.Conv2d(32 * 2, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
 
