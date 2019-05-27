@@ -112,7 +112,7 @@ def main():
             predicted_observations = model(observations[0], actions)
 
             video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]])
-            videos.append(video[:, 0].unsqueeze(1))
+            videos.append(video[:, 0, :, :, :].unsqueeze(1))
             if args.save_gif:
                 torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
 
