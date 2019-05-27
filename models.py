@@ -461,3 +461,33 @@ class ETDM(torch.nn.Module):
             predicted_observations.append(prediction.unsqueeze(0))
 
         return torch.cat(predicted_observations, 0)    
+
+class ETDSD(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = EncoderSkip(H, W, C, filter_size)
+        self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = DecoderSkip(H // 8, W // 8, C, filter_size)
+
+    def forward(self, observation_0, actions):
+        predicted_observations = []
+
+        last_state, en1, en2 = self.encoder(observation_0)
+        en1 = en1.detach()
+        en2 = en2.detach()
+
+        for t in range(self.T):
+            action = actions[t]
+            new_state = self.transform(last_state, action)
+            prediction, en1, en2 = self.decoder(new_state, en1, en2)
+            last_state = new_state
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
