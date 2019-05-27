@@ -111,8 +111,9 @@ def main():
 
             predicted_observations = model(observations[0], actions)
 
-            video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]])
-            videos.append(video[:, 0, :, :, :].unsqueeze(1))
+            video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]]) # tensor[T, C, H, W]
+            videos.append(video.unsqueeze(0))
+            
             if args.save_gif:
                 torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
 
@@ -121,8 +122,8 @@ def main():
             
             opt.zero_grad()
         
-        videos = torch.cat(videos, 1)
-        writer.add_video('val_video', videos.permute(1, 0, 2, 3, 4), global_step=epoch, fps=10)
+        videos = torch.cat(videos, 0)
+        writer.add_video('val_video', videos, global_step=epoch, fps=10)
 
         print("-" * 50)
         print("In epoch {}, loss in val set is {}".format(epoch, np.mean(losses)))
