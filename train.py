@@ -6,7 +6,7 @@ import numpy as np
 from Video_dataset import VideoDataset
 from model_util import setup_seed, mse_loss, save_model, load_model
 from data_util import torch_save_gif
-from models import CDNA, ETD, ETDS
+from models import CDNA, ETD, ETDS, ETDM
 
 import argparse, os
 
@@ -53,6 +53,8 @@ def main():
         model = ETD(H, W, C, A, T, 5)
     elif args.model_name == 'etds':
         model = ETDS(H, W, C, A, T, 5)
+    elif args.model_name == 'etdm':
+        model = ETDM(H, W, C, A, T, 5)
 
     model.to(device)
 

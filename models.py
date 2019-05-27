@@ -426,3 +426,38 @@ class ETDS(torch.nn.Module):
             predicted_observations.append(prediction.unsqueeze(0))
 
         return torch.cat(predicted_observations, 0)
+
+class ETDM(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = EncoderSkip(H, W, C, filter_size)
+        self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder_skip = DecoderSkip(H // 8, W // 8, C, filter_size)
+        self.decoder_normal = Decoder(H // 8, W // 8, C, filter_size)
+        self.decoder_mask = Decoder(H // 8, W // 8, 1, filter_size)
+
+    def forward(self, observation_0, actions):
+        predicted_observations = []
+
+        last_state, en1, en2 = self.encoder(observation_0)
+
+        for t in range(self.T):
+            action = actions[t]
+            new_state = self.transform(last_state, action)
+            
+            prediction_skip, en1, en2 = self.decoder_skip(new_state, en1, en2)
+            prediction_normal = self.decoder_normal(new_state)
+            prediction_mask = torch.sigmoid(self.decoder_mask(new_state))
+            prediction = prediction_mask * prediction_normal + (1 - prediction_mask) * prediction_skip
+
+            last_state = new_state
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)    
