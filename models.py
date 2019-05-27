@@ -200,16 +200,20 @@ class DecoderSkip(torch.nn.Module):
 
         self.deconv1 = torch.nn.ConvTranspose2d(128, 64, 
                                 kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1)
-        self.conv1 = torch.nn.Conv2d(64, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv1_1 = torch.nn.Conv2d(64, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv1_2 = torch.nn.Conv2d(64, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
         self.conv1_skip = torch.nn.Conv2d(64 * 2, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
         self.conv1_norm = torch.nn.LayerNorm((64, H * 2, W * 2))
         self.conv1_skip_norm = torch.nn.LayerNorm((64, H * 2, W * 2))
+
         self.deconv2 = torch.nn.ConvTranspose2d(64, 32, 
                                 kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1) 
-        self.conv2 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)  
+        self.conv2_1 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)  
+        self.conv2_2 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
         self.conv2_skip = torch.nn.Conv2d(32 * 2, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
         self.conv2_norm = torch.nn.LayerNorm((32, H * 4, W * 4))
         self.conv2_skip_norm = torch.nn.LayerNorm((32, H * 4, W * 4))
+
         self.deconv3 = torch.nn.ConvTranspose2d(32, 16, 
                                 kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1)       
         self.conv3 = torch.nn.Conv2d(16, 16, kernel_size=self.filter_size, stride=1, padding=self.padding)
@@ -227,14 +231,21 @@ class DecoderSkip(torch.nn.Module):
                 en2 -> tensor[B, 32, H * 4, W * 4]
         """
         upsample1 = F.relu(self.deconv1(state))
+
         cat1 = torch.cat([upsample1, en2], 1)
-        upsample1 = (self.conv1_norm(F.relu(self.conv1(upsample1))) + en2) / 2.0
         en2 = self.conv1_skip_norm(F.relu(self.conv1_skip(cat1)))
+        upsample1 = (self.conv1_norm(F.relu(self.conv1_1(upsample1))) + en2) / 2.0
+        upsample1 = F.relu(self.conv1_2(upsample1))
+        # upsample1 = F.relu(self.conv1(upsample1)) + en2      
         upsample2 = F.relu(self.deconv2(upsample1))
+
         cat2 = torch.cat([upsample2, en1], 1)
-        upsample2 = (self.conv2_norm(F.relu(self.conv2(upsample2))) + en1) / 2.0
         en1 = self.conv2_skip_norm(F.relu(self.conv2_skip(cat2)))
+        upsample2 = (self.conv2_norm(F.relu(self.conv2_1(upsample2))) + en1) / 2.0
+        upsample2 = F.relu(self.conv2_2(upsample2))
+        # upsample2 = F.relu(self.conv2(upsample2)) + en1
         upsample3 = F.relu(self.deconv3(upsample2))
+
         upsample3 = F.relu(self.conv3(upsample3))
 
         observation = self.conv_top(upsample3)
