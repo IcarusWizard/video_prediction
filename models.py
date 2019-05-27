@@ -189,7 +189,7 @@ class EncoderSkip(torch.nn.Module):
 
         return state, en1, en2
 
-class DecoderSkip(torch.nn.Module):
+class _DecoderSkip(torch.nn.Module):
     def __init__(self, H=8, W=8, C=3, filter_size=5):
         super().__init__()
         self.H = H
@@ -244,6 +244,63 @@ class DecoderSkip(torch.nn.Module):
         upsample2 = (self.conv2_norm(F.relu(self.conv2_1(upsample2))) + en1) / 2.0
         upsample2 = F.relu(self.conv2_2(upsample2))
         # upsample2 = F.relu(self.conv2(upsample2)) + en1
+        upsample3 = F.relu(self.deconv3(upsample2))
+
+        upsample3 = F.relu(self.conv3(upsample3))
+
+        observation = self.conv_top(upsample3)
+
+        return observation, en1, en2
+
+class DecoderSkip(torch.nn.Module):
+    def __init__(self, H=8, W=8, C=3, filter_size=5):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.filter_size = filter_size
+        self.padding = self.filter_size // 2
+
+        self.deconv1 = torch.nn.ConvTranspose2d(128, 64, 
+                                kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1)
+        self.conv1_1 = torch.nn.Conv2d(64 * 2, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv1_2 = torch.nn.Conv2d(64, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv1_skip = torch.nn.Conv2d(64 * 2, 64, kernel_size=self.filter_size, stride=1, padding=self.padding)
+
+        self.deconv2 = torch.nn.ConvTranspose2d(64, 32, 
+                                kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1) 
+        self.conv2_1 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)  
+        self.conv2_2 = torch.nn.Conv2d(32, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv2_skip = torch.nn.Conv2d(32 * 2, 32, kernel_size=self.filter_size, stride=1, padding=self.padding)
+
+        self.deconv3 = torch.nn.ConvTranspose2d(32, 16, 
+                                kernel_size=self.filter_size, stride=2, padding=self.padding, output_padding=1)       
+        self.conv3 = torch.nn.Conv2d(16, 16, kernel_size=self.filter_size, stride=1, padding=self.padding)
+        self.conv_top = torch.nn.Conv2d(16, self.C, kernel_size=self.filter_size, stride=1, padding=self.padding)
+
+    def forward(self, state, en1, en2):
+        """
+            Input:
+                state -> tensor[B, 128, H, W]
+                en1 -> tensor[B, 64, H * 2, W * 2]
+                en2 -> tensor[B, 32, H * 4, W * 4]
+            Output:
+                observation -> tensor[B, C, H * 8, W * 8]
+                en1 -> tensor[B, 64, H * 2, W * 2]
+                en2 -> tensor[B, 32, H * 4, W * 4]
+        """
+        upsample1 = F.relu(self.deconv1(state))
+
+        cat1 = torch.cat([upsample1, en2], 1)
+        en2 = self.conv1_skip(cat1)
+        upsample1 = F.relu(self.conv1_1(cat1))
+        upsample1 = F.relu(self.conv1_2(upsample1))    
+        upsample2 = F.relu(self.deconv2(upsample1))
+
+        cat2 = torch.cat([upsample2, en1], 1)
+        en1 = self.conv2_skip(cat2)
+        upsample2 = F.relu(self.conv2_1(cat2))
+        upsample2 = F.relu(self.conv2_2(upsample2))
         upsample3 = F.relu(self.deconv3(upsample2))
 
         upsample3 = F.relu(self.conv3(upsample3))
