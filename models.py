@@ -368,23 +368,32 @@ class CDNA(VideoPrediction):
         # Initialize your network here
         lstm_size = [32, 32, 64, 64, 128, 64, 32]
         self.enc0 = nn.Conv2d(3, 32, 5, stride=2, padding=2)
+        self.norm0 = nn.LayerNorm((32, 32, 32))
         self.lstm1 = CNN_LSTM(32, 32, 32, lstm_size[0], 5)
+        self.norm1 = nn.LayerNorm((lstm_size[0], 32, 32))
         self.lstm2 = CNN_LSTM(32, 32, lstm_size[0], lstm_size[1], 5)
+        self.norm2 = nn.LayerNorm((lstm_size[1], 32, 32))
 
         self.enc1 = nn.Conv2d(lstm_size[1], lstm_size[2], 3, stride=2, padding=1) 
         # Why is the kernel 3?
         self.lstm3 = CNN_LSTM(16, 16, lstm_size[2], lstm_size[2], 5)
+        self.norm3 = nn.LayerNorm((lstm_size[2], 16, 16))
         self.lstm4 = CNN_LSTM(16, 16, lstm_size[2], lstm_size[3], 5)
+        self.norm4 = nn.LayerNorm((lstm_size[3], 16, 16))
 
         self.enc2 = nn.Conv2d(lstm_size[3], lstm_size[3], 3, stride=2, padding=1)
         self.enc3 = nn.Conv2d(lstm_size[3] + 8, lstm_size[4], 1)
 
         self.lstm5 = CNN_LSTM(8, 8, lstm_size[4], lstm_size[4], 5) 
+        self.norm5 = nn.LayerNorm((lstm_size[4], 8, 8))
         self.enc4 = nn.ConvTranspose2d(lstm_size[4], lstm_size[5], 3, stride=2, padding=1, output_padding=1)
         self.lstm6 = CNN_LSTM(16, 16, lstm_size[5], lstm_size[5], 5)
+        self.norm6 = nn.LayerNorm((lstm_size[5], 16, 16))
         self.enc5 = nn.ConvTranspose2d(lstm_size[5] + lstm_size[2], lstm_size[6], 3, stride=2, padding=1, output_padding=1)
         self.lstm7 = CNN_LSTM(32, 32, lstm_size[6], lstm_size[6], 5)
-        self.enc6 = nn.ConvTranspose2d(lstm_size[6] +lstm_size[0], 11, 3, stride=2, padding=1, output_padding=1)  
+        self.norm7 = nn.LayerNorm((lstm_size[6], 32, 32))
+        self.enc6 = nn.ConvTranspose2d(lstm_size[6] +lstm_size[0], 11, 3, stride=2, padding=1, output_padding=1) 
+        self.norm8 = nn.LayerNorm((11, 64, 64)) 
         self.enc7 = nn.Conv2d(11, 11, 1) 
 
         self.fc1 = nn.Linear(128 * 8 * 8, 10 * 5 * 5) 
@@ -400,12 +409,16 @@ class CDNA(VideoPrediction):
             action = actions[t] # action = [B, A]
             batch_size = action.shape[0]
             # Implement the prediction here
-            enc0 = F.relu(self.enc0(last_observation))
+            enc0 = self.norm0(F.relu(self.enc0(last_observation)))
             observation_1, state1 = self.lstm1(enc0, state1)
+            observation_1 = self.norm1(observation_1)
             observation_2, state2 = self.lstm2(observation_1, state2)
+            observation_2 = self.norm2(observation_2)
             enc1 = F.relu(self.enc1(observation_2))
             observation_3, state3 = self.lstm3(enc1, state3)
+            observation_3 = self.norm3(observation_3)
             observation_4, state4 = self.lstm4(observation_3, state4)
+            observation_4 = self.norm4(observation_4)
             
             enc2 = F.relu(self.enc2(observation_4))
 
@@ -416,22 +429,25 @@ class CDNA(VideoPrediction):
             enc3 = F.relu(self.enc3(enc2))
 
             observation_5, state5 = self.lstm5(enc3, state5)
+            observation_5 = self.norm5(observation_5)
             enc4 = F.relu(self.enc4(observation_5))
             observation_6, state6 = self.lstm6(enc4, state6)
+            observation_6 = self.norm6(observation_6)
 
             # Skip connection
             observation_6 = torch.cat((observation_6, enc1), 1) 
             enc5 = F.relu(self.enc5(observation_6))
             observation_7, state7 = self.lstm7(enc5, state7)
+            observation_7 = self.norm7(observation_7)
             # Skip connection
             observation_7 = torch.cat((observation_7, enc0), 1) 
-            enc6 = F.relu(self.enc6(observation_7))
+            enc6 = self.norm8(F.relu(self.enc6(observation_7)))
             enc7 = F.relu(self.enc7(enc6))
             masks = F.softmax(enc7, dim=1)
 
             # CDNA kernels
             line = observation_5.view(-1, 128 * 8 * 8)
-            linear_kernal = F.relu(self.fc1(line))
+            linear_kernal = F.relu(self.fc1(line) - 1e-12) + 1e-12
             kernels = linear_kernal.view(batch_size, 10, 5, 5)
 
             norm_factor = torch.sum(kernels, 1).view(-1, 1, 5, 5)
