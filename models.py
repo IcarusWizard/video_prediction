@@ -20,31 +20,40 @@ class CNN_LSTM(torch.nn.Module):
         self.forget_bias = forget_bias
 
         # Initiailize your layers here
+        self.conv = nn.Conv2d(self.C + self.out_channels, 4 * self.out_channels, self.filter_size)
 
-        raise NotImplementedError
+    def initialize_state(self, batch_size):
+        # get the initial value for hidden state
+        state = torch.zeros(batch_size, 2 * self.output_channels, self.H, self.W)
+        return state
 
-    def initialize_h(self):
-        # get the initial value for h
-
-        raise NotImplementedError
-
-    def forward(self, inputs, h=None):
+    def forward(self, inputs, state=None):
         """
             Inputs:
                 inputs -> tensor[B, C, H, W]
-                h -> tensor[B, 2 * output_channels, H, W]
+                state -> tensor[B, 2 * output_channels, H, W]
             Outputs:
                 outputs -> tensor[B, output_chanels, H, W]
-                new_h -> tensor[B, 2 * output_channels, H, W]
+                new_state -> tensor[B, 2 * output_channels, H, W]
         """
-        if h == None:
-            h = self.initialize_h()
+        
+        batch_size = list(inputs.size())[0]
+
+        if state is None:
+            state = self.initialize_state(batch_size)
+
+        c, h = torch.split(state, self.output_channels, dim=1)
+        inputs_h = torch.cat((inputs, h), 1) 
 
         # do forward computation here
+        i_j_f_o = F.relu(self.conv(inputs_h))
 
-        raise NotImplementedError
+        i, j, f, outputs= torch.split(i_j_f_o, self.output_channels, dim=1)
+        new_c = c * F.sigmoid(f + self.forget_bias) + F.sigmoid(i) + F.tanh(j)
+        new_h = F.tanh(new_c) + F.sigmoid(outputs)
+        new_state = torch.cat((new_c, new_h), 1)
 
-        return outputs, new_h
+        return outputs, new_state
 
 class Encoder(torch.nn.Module):
     def __init__(self, H=64, W=64, C=3, filter_size=5):
@@ -349,22 +358,93 @@ class CDNA(VideoPrediction):
         super(CDNA, self).__init__(T, H, W, C, A)
         
         # Initialize your network here
+        lstm_size = [32, 32, 64, 64, 128, 64, 32]
+        self.enc0 = nn.Conv2d(1, 32, 5, stride=2, padding=2)
+        self.lstm1 = CNN_LSTM(32, 32, 32, lstm_size[0], 5)
+        self.lstm2 = CNN_LSTM(32, 32, lstm_size[0], lstm_size[1], 5)
 
-        raise NotImplementedError
+        self.enc1 = nn.Conv2d(lstm_size[1], lstm_size[2], 3, stride=2, padding=1) 
+        # Why is the kernel 3?
+        self.lstm3 = CNN_LSTM(16, 16, lstm_size[2], lstm_size[2], 5)
+        self.lstm4 = CNN_LSTM(16, 16, lstm_size[2], lstm_size[3], 5)
+
+        self.enc2 = nn.Conv2d(lstm_size[3], lstm_size[3], 3, stride=2, padding=1)
+        self.enc3 = nn.Conv2d(lstm_size[3] + 10, lstm_size[4], 1)
+
+        self.lstm5 = CNN_LSTM(8, 8, lstm_size[4], lstm_size[4], 5) 
+        self.enc4 = nn.ConvTranspose2d(lstm_size[4], lstm_size[5], 3, stride=2, padding=1, output_padding=1)
+        self.lstm6 = CNN_LSTM(16, 16, lstm_size[5], lstm_size[5], 5)
+        self.enc5 = nn.ConvTranspose2d(lstm_size[5], lstm_size[6], 3, stride=2, padding=1, output_padding=1)
+        self.lstm7 = CNN_LSTM(16, 16, lstm_size[6], lstm_size[6], 5)
+        self.enc6 = nn.ConvTranspose2d(lstm_size[6], 11, 3, stride=2, padding=1, output_padding=1)  
+        self.enc7 = nn.Conv2d(11, 11, 1) 
+
+        self.fc1 = nn.Linear(128 * 8 * 8, 10 * 5 * 5) 
+        
 
     def forward(self, observation_0, actions):
         last_observation = observation_0
-
+        state1, state2, state3, state4, state5, state6, state7 = None, None, None, None, None, None, None
         predicted_observations = []
 
+
         for t in self.T:
-            action = actions[t]
-
+            action = actions[t] # action = [B, A]
+            batch_size = action.shape[0]
             # Implement the prediction here
+            enc0 = F.relu(self.enc0(last_observation))
+            observation_1, state1 = F.relu(self.lstm1(enc0, state1))
+            observation_2, state2 = F.relu(self.lstm2(observation_1, state2))
+            enc1 = F.relu(self.enc1(observation_2))
+            observation_3, state3 = F.relu(self.lstm3(enc1, state3))
+            observation_4, state4 = F.relu(self.lstm4(observation_3, state4))
             
-            prediction = None
+            enc2 = F.relu(self.enc2(observation_4))
 
-            raise NotImplementedError
+            # Pass in action
+            smear = action.view(batch_size, self.A, 1, 1)
+            smear = action.repeat(1, 10, 8, 2) # Tile action(Bx1x1x4) to Bx10x8x8
+            enc2 = torch.cat((observation_4, smear), 1)
+            enc3 = F.relu(self.enc3(enc2))
+
+            observation_5, state5 = F.relu(self.lstm5(enc3, state5))
+            enc4 = F.relu(self.enc4(observation_5))
+            observation_6, state6 = F.relu(self.lstm6(enc4, state6))
+
+            # Skip connection
+            observation_6 = torch.cat((observation_6, enc1), 1) 
+            enc5 = F.relu(self.enc5(observation_6))
+            observation_7, state7 = F.relu(self.lstm7(enc5, state7))
+            # Skip connection
+            observation_7 = torch.cat((observation_7, enc0), 1) 
+            enc6 = F.relu(self.enc6(observation_7))
+            enc7 = F.relu(self.enc7(enc6))
+            masks = F.softmax(enc7, dim=1)
+
+            # CDNA kernels
+            line = observation_5.view(128 * 8 * 8)
+            linear_kernal = F.relu(self.fc1(line))
+            kernels = linear_kernal.view(batch_size, 10, 5, 5)
+
+            norm_factor = torch.sum(kernels, (1, 2, 3))
+            kernels /= norm_factor
+            images = []
+            for b in batch_size:
+                images.append(F.conv2d(observation_0[b], kernels[b], padding=2).unsqueeze(0)) # ?
+            transformed_images = torch.cat(images, 0)
+
+            transformed_images.transpose(1, 2) # Change the dimention of channel and color channel
+            
+            transformed_images = torch.cat((transformed_images, observation_0.unsqueeze(2)), 2)
+            image_r = transformed_images[:, 0, :, :, :].view(batch_size, 11, 64, 64)
+            image_g = transformed_images[:, 1, :, :, :].view(batch_size, 11, 64, 64)
+            image_b = transformed_images[:, 2, :, :, :].view(batch_size, 11, 64, 64)
+            
+            predicted_r = image_r * masks
+            predicted_g = image_g * masks
+            predicted_b = image_b * masks
+
+            prediction = torch.cat([predicted_r.unsqueeze(1), predicted_g.unsqueeze(1), predicted_b.unsqueeze(1)], 1)
 
             predicted_observations.append(prediction.unsqueeze(0))
             last_observation = prediction
