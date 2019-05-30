@@ -2,7 +2,7 @@ import torch
 import torchvision
 import numpy as np
 
-import pickle, os, random, time
+import pickle, os, random, time, argparse
 
 from data_util import torch_save_gif
 
@@ -91,16 +91,27 @@ class VideoDataset(torch.utils.data.Dataset):
         return output
 
 if __name__ == '__main__':
-    dataset = VideoDataset('data/bair', 'val', horizon=10, fix_start=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, default='test')
+    parser.add_argument('--horizon', type=int, default=10)
+
+    args = parser.parse_args()
+
+    dataset = VideoDataset('data/bair', args.dataset, horizon=args.horizon, fix_start=True)
     config = dataset.get_config()
     print(config)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=16, num_workers=8, shuffle=False)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=16, num_workers=4, shuffle=False)
     count = 0
     start = time.time()
+
+    gif_path = os.path.join('gt', '{}_{}'.format(args.dataset, args.horizon))
+    if not os.path.exists(gif_path):
+        os.makedirs(gif_path)
+
     for data in loader:
         end = time.time()
         print(end - start)
         start = end
         imgs = data['observations'][0]
-        torch_save_gif('%03d_video.gif' % count, imgs, fps=10)
+        torch_save_gif(os.path.join(gif_path, '{}.gif'.format(count)), imgs, fps=10)
         count += 1
