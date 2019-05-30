@@ -88,6 +88,8 @@ def main():
         loss = mse_loss(observations, predicted_observations).item() / args.batch_size
         losses.append(loss)
 
+        del loss, observations, actions # clear the memory
+
     
     videos = torch.cat(videos, 0)
     writer.add_video('test_video_{}_{}'.format(args.model_name, args.horizon), videos, global_step=0, fps=10)
