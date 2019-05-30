@@ -67,28 +67,29 @@ def main():
     videos = []
     inference_times = []
 
-    for j, data in enumerate(test_loader):
-        observations = data['observations']
-        actions = data['actions']
+    with torch.no_grad():
+        for j, data in enumerate(test_loader):
+            observations = data['observations']
+            actions = data['actions']
 
-        # B x T ==> T x B
-        observations = torch.transpose(observations, 0, 1).to(device)
-        actions = torch.transpose(actions, 0, 1).to(device)
+            # B x T ==> T x B
+            observations = torch.transpose(observations, 0, 1).to(device)
+            actions = torch.transpose(actions, 0, 1).to(device)
 
-        start_time = time.time()
-        predicted_observations = model(observations[0], actions)
-        inference_times.append((time.time() - start_time) * 1000)
+            start_time = time.time()
+            predicted_observations = model(observations[0], actions)
+            inference_times.append((time.time() - start_time) * 1000)
 
-        video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]]) # tensor[T, C, H, W]
-        videos.append(video.unsqueeze(0).detach().cpu())
+            video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]]) # tensor[T, C, H, W]
+            videos.append(video.unsqueeze(0).detach().cpu())
 
-        if args.save_gif:
-            torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
+            if args.save_gif:
+                torch_save_gif(os.path.join(gif_path, "{}.gif".format(j)), video.detach().cpu(), fps=10)
 
-        loss = mse_loss(observations, predicted_observations).item() / args.batch_size
-        losses.append(loss)
+            loss = mse_loss(observations, predicted_observations).item() / args.batch_size
+            losses.append(loss)
 
-        del loss, observations, actions, predicted_observations # clear the memory
+            del loss, observations, actions, predicted_observations # clear the memory
 
     
     videos = torch.cat(videos, 0)
