@@ -88,7 +88,7 @@ def main():
         loss = mse_loss(observations, predicted_observations).item() / args.batch_size
         losses.append(loss)
 
-        del loss, observations, actions # clear the memory
+        del loss, observations, actions, predicted_observations # clear the memory
 
     
     videos = torch.cat(videos, 0)
