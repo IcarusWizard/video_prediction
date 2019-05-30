@@ -8,7 +8,7 @@ from model_util import setup_seed, mse_loss, save_model, load_model
 from data_util import torch_save_gif
 from models import CDNA, ETD, ETDS, ETDM, ETDSD
 
-import argparse, os
+import argparse, os, time
 
 def main():
     parser = argparse.ArgumentParser()
@@ -65,6 +65,7 @@ def main():
 
     losses = []
     videos = []
+    inference_times = []
 
     for j, data in enumerate(test_loader):
         observations = data['observations']
@@ -74,7 +75,9 @@ def main():
         observations = torch.transpose(observations, 0, 1).to(device)
         actions = torch.transpose(actions, 0, 1).to(device)
 
+        start_time = time.time()
         predicted_observations = model(observations[0], actions)
+        inference_times.append((time.time() - start_time) * 1000)
 
         video = torch.cat([observations[0, 0].unsqueeze(0), predicted_observations[0 : T - 1, 0]]) # tensor[T, C, H, W]
         videos.append(video.unsqueeze(0).detach().cpu())
@@ -90,7 +93,8 @@ def main():
     writer.add_video('test_video_{}_{}'.format(args.model_name, args.horizon), videos, global_step=0, fps=10)
 
     print("-" * 50)
-    print("loss in test set is {}".format(np.mean(losses)))
+    print("mean loss in test set is {}, std is {}".format(np.mean(losses), np.std(losses)))
+    print("mean inference time in test set is {}, std is {}".format(np.mean(inference_times), np.std(inference_times)))
     print("-" * 50)
 
 
