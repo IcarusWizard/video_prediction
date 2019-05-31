@@ -1,0 +1,6 @@
+pytorch=1.1.0
+torchvision
+matplotlib
+numpy
+moviepy
+tb-nightly

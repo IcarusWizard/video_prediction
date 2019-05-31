@@ -1,7 +1,6 @@
 """
     Usage: 
-    python data_converter.py --input_path /home/icarus/git/visual_foresight/video_prediction/data/bair \
-        --output_path data/bair/
+    python data_converter.py --input_path <Where your bair dataset is> 
 """
 
 import tensorflow as tf
@@ -164,7 +163,7 @@ class Converter(object):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_path', type=str)
-    parser.add_argument('--output_path', type=str)
+    parser.add_argument('--output_path', type=str, default='data/bair/')
     args = parser.parse_args()
 
     converter = Converter(args.input_path, args.output_path)
