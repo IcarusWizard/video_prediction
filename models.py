@@ -2,10 +2,28 @@ import torch
 import torchvision
 from torch.functional import F
 from torch import nn
+from model_util import apply_cdna_kernel
 
 # --------------------------------------------------------
 #                        Modules
 # --------------------------------------------------------
+class Flatten(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return x.view(x.shape[0], -1)
+
+class Unflatten(torch.nn.Module):
+    def __init__(self, c, h, w):
+        super().__init__()
+        self.c = c
+        self.h = h
+        self.w = w
+
+    def forward(self, x):
+        return x.view(-1, self.c, self.h, self.w)
+
 class CNN_LSTM(nn.Module):
     """
         you may refer to :
@@ -42,26 +60,22 @@ class CNN_LSTM(nn.Module):
                 outputs -> tensor[B, output_chanels, H, W]
                 new_state -> tensor[B, 2 * output_channels, H, W]
         """
-        
-        
 
         if state is None:
             state = self.initialize_state(inputs)
 
         c, h = torch.split(state, self.output_channels, dim=1)
-        # c = c.to(inputs.device)
-        # h = h.to(inputs.device)
         inputs_h = torch.cat((inputs, h), 1)
 
         # do forward computation here
         i_j_f_o = F.relu(self.conv(inputs_h))
 
-        i, j, f, outputs = torch.split(i_j_f_o, self.output_channels, dim=1)
-        new_c = c * torch.sigmoid(f + self.forget_bias) + torch.sigmoid(i) + torch.tanh(j)
-        new_h = torch.tanh(new_c) + torch.sigmoid(outputs)
+        i, j, f, o = torch.split(i_j_f_o, self.output_channels, dim=1)
+        new_c = c * torch.sigmoid(f + self.forget_bias) + torch.sigmoid(i) * torch.tanh(j)
+        new_h = torch.tanh(new_c) * torch.sigmoid(o)
         new_state = torch.cat((new_c, new_h), 1)
 
-        return outputs, new_state
+        return new_h, new_state
 
 class Encoder(torch.nn.Module):
     def __init__(self, H=64, W=64, C=3, filter_size=5):
@@ -452,26 +466,12 @@ class CDNA(VideoPrediction):
 
             norm_factor = torch.sum(kernels, 1).view(-1, 1, 5, 5)
             kernels /= norm_factor
-            images = []
-            for b in range(batch_size):
-                images.append(
-                    F.conv2d(observation_0[b].unsqueeze(1), kernels[b].unsqueeze(1), padding=2
-                    ).unsqueeze(0)) # ?
-            transformed_images = torch.cat(images, 0)
 
-            transformed_images.transpose(1, 2) # Change the dimention of channel and color channel
-            
-            transformed_images = torch.cat((transformed_images, observation_0.unsqueeze(2)), 2)
-            image_r = transformed_images[:, 0, :, :, :].view(batch_size, 11, 64, 64)
-            image_g = transformed_images[:, 1, :, :, :].view(batch_size, 11, 64, 64)
-            image_b = transformed_images[:, 2, :, :, :].view(batch_size, 11, 64, 64)
-            
-            predicted_r = image_r * masks
-            predicted_g = image_g * masks
-            predicted_b = image_b * masks
+            transformed_images = apply_cdna_kernel(last_observation, kernels)
 
-            prediction = torch.cat([predicted_r.unsqueeze(1), predicted_g.unsqueeze(1), predicted_b.unsqueeze(1)], 1)
-            prediction = sum(i for i in torch.unbind(prediction, dim=2))
+            transformed_images = torch.cat((transformed_images, observation_0.unsqueeze(1)), 1)
+            prediction = torch.sum(transformed_images * masks.unsqueeze(dim=2), dim=1)
+
             predicted_observations.append(prediction.unsqueeze(0))
             last_observation = prediction
 
@@ -527,7 +527,8 @@ class ETDS(torch.nn.Module):
         for t in range(self.T):
             action = actions[t]
             new_state = self.transform(last_state, action)
-            prediction, en1, en2 = self.decoder(new_state, en1, en2)
+            # prediction, en1, en2 = self.decoder(new_state, en1, en2)
+            prediction, _, _ = self.decoder(new_state, en1, en2)
             last_state = new_state
             predicted_observations.append(prediction.unsqueeze(0))
 
@@ -546,6 +547,7 @@ class ETDM(torch.nn.Module):
         self.encoder = EncoderSkip(H, W, C, filter_size)
         self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
         self.decoder_skip = DecoderSkip(H // 8, W // 8, C, filter_size)
+        # self.decoder_normal = Decoder(H // 8, W // 8, C + 1, filter_size)
         self.decoder_normal = Decoder(H // 8, W // 8, C, filter_size)
         self.decoder_mask = Decoder(H // 8, W // 8, 1, filter_size)
 
@@ -559,6 +561,9 @@ class ETDM(torch.nn.Module):
             new_state = self.transform(last_state, action)
             
             prediction_skip, en1, en2 = self.decoder_skip(new_state, en1, en2)
+            # prediction_normal = self.decoder_normal(new_state)
+            # prediction_mask = torch.sigmoid(prediction_normal[:, -1]).unsqueeze(dim=1)
+            # prediction_normal = prediction_normal[:, :-1]
             prediction_normal = self.decoder_normal(new_state)
             prediction_mask = torch.sigmoid(self.decoder_mask(new_state))
             prediction = prediction_mask * prediction_normal + (1 - prediction_mask) * prediction_skip
@@ -594,6 +599,354 @@ class ETDSD(torch.nn.Module):
             new_state = self.transform(last_state, action)
             prediction, en1, en2 = self.decoder(new_state, en1, en2)
             last_state = new_state
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class ETDMM(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = Encoder(H, W, C, filter_size)
+        self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = Decoder(H // 8, W // 8, C + 1, filter_size)
+
+    def forward(self, observation_0, actions):
+        predicted_observations = []
+
+        last_state = self.encoder(observation_0)
+        
+        state_diff = 0
+
+        for t in range(self.T):
+            action = actions[t]
+            new_state = self.transform(last_state, action)
+            prediction = self.decoder(new_state)
+            mask = torch.sigmoid(prediction[:, -1]).unsqueeze(dim=1)
+            prediction = prediction[:, :-1]
+            prediction = mask * prediction + ((1 - mask) * observation_0).detach()
+            state_diff += torch.sqrt(torch.sum((new_state - last_state) ** 2, dim=(1, 2, 3)))
+            last_state = new_state
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0), state_diff.mean() / self.T * 0
+
+class RETD(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = Encoder(H, W, C, filter_size)
+        self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = Decoder(H // 8, W // 8, C, filter_size)
+
+    def forward(self, obs_0, actions):
+        predicted_observations = []
+
+        last_obs = obs_0
+
+        for t in range(self.T):
+            state = self.encoder(last_obs)
+            action = actions[t]
+            new_state = self.transform(state, action)
+            prediction = self.decoder(new_state)
+            last_obs = prediction
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class RETDS(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = EncoderSkip(H, W, C, filter_size)
+        self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = DecoderSkip(H // 8, W // 8, C, filter_size)
+
+    def forward(self, obs_0, actions):
+        predicted_observations = []
+
+        last_obs = obs_0
+
+        for t in range(self.T):
+            state, en1, en2 = self.encoder(obs_0)
+            action = actions[t]
+            new_state = self.transform(state, action)
+            prediction, en1, en2 = self.decoder(new_state, en1, en2)
+            last_obs = prediction
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class LETD(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        self.encoder = Encoder(H, W, C, filter_size)
+        self.lstm = CNN_LSTM(H // 8, W // 8, 64, 64, 5)
+        # self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = Decoder(H // 8, W // 8, C, filter_size)
+
+    def forward(self, obs_0, actions):
+        predicted_observations = []
+        state = self.encoder(obs_0)
+
+        for t in range(self.T):
+            action = actions[t]
+            action = action.view(-1, 4, 1, 1)
+            action = action.repeat(1, 16, 8, 8)
+            hidden_output, state = self.lstm(action, state) 
+            
+            # new_state = self.transform(hidden_output, action)
+            prediction = self.decoder(state)
+            # last_obs = prediction
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class LETDS(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+
+        # self.encoder = SkipEncoder(H, W, C, filter_size)
+        self.lstm = CNN_LSTM(H // 8, W // 8, 64, 64, 5)
+        # self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        # self.decoder = Decoder(H // 8, W // 8, C, filter_size)
+
+        self.encoder = EncoderSkip(H, W, C, filter_size)
+        # self.transform = StateTransform(H // 8, W // 8, 128, A, filter_size)
+        self.decoder = DecoderSkip(H // 8, W // 8, C, filter_size)
+
+    def forward(self, obs_0, actions):
+        predicted_observations = []
+        state, enc1, enc2 = self.encoder(obs_0)
+
+        for t in range(self.T):
+            action = actions[t]
+            action = action.view(-1, 4, 1, 1)
+            action = action.repeat(1, 16, 8, 8)
+            hidden_output, state = self.lstm(action, state) 
+            
+            # new_state = self.transform(hidden_output, action)
+            # prediction, enc1, enc2 = self.decoder(state, enc1, enc2)
+            prediction, _, _ = self.decoder(state, enc1, enc2)
+            # last_obs = prediction
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class FETD(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size=3, latent_size=32):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+        padding = filter_size // 2
+
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Conv2d(self.C, 32, filter_size, padding=padding),
+            torch.nn.LayerNorm((32, self.H, self.W)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(32, 64, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),     
+            torch.nn.Conv2d(64, 64, filter_size, padding=padding),
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(64, 128, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),       
+            torch.nn.Conv2d(128, 128, filter_size, padding=padding),
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(128, 256, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),     
+            torch.nn.Conv2d(256, 256, filter_size, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(256, 256, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 16, self.W // 16)),
+            torch.nn.ReLU(True),    
+            Flatten(),
+            torch.nn.Linear(256 * (self.H // 16) * (self.W // 16), 256),
+            torch.nn.ReLU(True),
+            torch.nn.Linear(256, latent_size), 
+        )
+
+        self.transform = torch.nn.Sequential(
+            torch.nn.Linear(latent_size + self.A, 256),
+            torch.nn.ReLU(True),
+            torch.nn.Linear(256, 256),
+            torch.nn.ReLU(True),
+            torch.nn.Linear(256, latent_size),
+        )
+
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(latent_size, 256),
+            torch.nn.ReLU(True),
+            torch.nn.Linear(256, 256 * (self.H // 16) * (self.W // 16)),
+            Unflatten(256, self.H // 16, self.W // 16),
+            torch.nn.Conv2d(256, 256, filter_size, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 16, self.W // 16)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(256, 256, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(256, 256, filter_size, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(256, 128, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),   
+            torch.nn.Conv2d(128, 128, filter_size, padding=padding),
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(128, 64, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),    
+            torch.nn.Conv2d(64, 64, filter_size, padding=padding),
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(64, 32, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((32, self.H, self.W)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(32, self.C, filter_size, padding=padding)                      
+        )
+
+    def forward(self, observation_0, actions):
+        predicted_observations = []
+
+        last_state = self.encoder(observation_0)
+
+        for t in range(self.T):
+            action = actions[t]
+            new_state = self.transform(torch.cat([last_state, action], dim=1))
+            prediction = self.decoder(new_state)
+            last_state = new_state
+            predicted_observations.append(prediction.unsqueeze(0))
+
+        return torch.cat(predicted_observations, 0)
+
+class LFETD(torch.nn.Module):
+    def __init__(self, H, W, C, A, T, filter_size=3, latent_size=32):
+        super().__init__()
+        self.H = H
+        self.W = W
+        self.C = C
+        self.A = A
+        self.T = T
+        self.filter_size = filter_size
+        self.latent_size = latent_size
+        padding = filter_size // 2
+
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Conv2d(self.C, 32, filter_size, padding=padding),
+            torch.nn.LayerNorm((32, self.H, self.W)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(32, 64, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),     
+            torch.nn.Conv2d(64, 64, filter_size, padding=padding),
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(64, 128, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),       
+            torch.nn.Conv2d(128, 128, filter_size, padding=padding),
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(128, 256, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),     
+            torch.nn.Conv2d(256, 256, filter_size, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(256, 256, filter_size, stride=2, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 16, self.W // 16)),
+            torch.nn.ReLU(True),    
+            Flatten(),
+            torch.nn.Linear(256 * (self.H // 16) * (self.W // 16), 256),
+            torch.nn.ReLU(True),
+            torch.nn.Linear(256, 2 * latent_size), 
+        )
+
+        self.transform = torch.nn.LSTMCell(self.A, latent_size)
+
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(latent_size, 256),
+            torch.nn.ReLU(True),
+            torch.nn.Linear(256, 256 * (self.H // 16) * (self.W // 16)),
+            Unflatten(256, self.H // 16, self.W // 16),
+            torch.nn.Conv2d(256, 256, filter_size, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 16, self.W // 16)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(256, 256, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(256, 256, filter_size, padding=padding),
+            torch.nn.LayerNorm((256, self.H // 8, self.W // 8)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(256, 128, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),   
+            torch.nn.Conv2d(128, 128, filter_size, padding=padding),
+            torch.nn.LayerNorm((128, self.H // 4, self.W // 4)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(128, 64, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),    
+            torch.nn.Conv2d(64, 64, filter_size, padding=padding),
+            torch.nn.LayerNorm((64, self.H // 2, self.W // 2)),
+            torch.nn.ReLU(True),  
+            torch.nn.ConvTranspose2d(64, 32, filter_size, stride=2, padding=padding, output_padding=1), 
+            torch.nn.LayerNorm((32, self.H, self.W)),
+            torch.nn.ReLU(True),
+            torch.nn.Conv2d(32, self.C, filter_size, padding=padding)                      
+        )
+
+    def forward(self, observation_0, actions):
+        predicted_observations = []
+
+        last_state = self.encoder(observation_0)
+        h, c = torch.chunk(last_state, 2, dim=1)
+
+        for t in range(self.T):
+            action = actions[t]
+            h, c = self.transform(action, (h, c))
+            prediction = self.decoder(h)
             predicted_observations.append(prediction.unsqueeze(0))
 
         return torch.cat(predicted_observations, 0)
